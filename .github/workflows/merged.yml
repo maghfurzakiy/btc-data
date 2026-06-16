@@ -1,9 +1,9 @@
 # Taruh di: .github/workflows/merged.yml
-# Cloud baseline: tiap jam tangkap snapshot + regenerate, lalu commit (arsip 24/7).
+# Cloud HANYA HyperDash (Binance diblokir 451 dari IP GitHub). Snapshot UPNL tiap jam.
 name: BTC Merged Hourly
 on:
   schedule:
-    - cron: "7 * * * *"     # tiap jam menit ke-7 (UTC), hindari menit 0 yang sering delay
+    - cron: "7 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
@@ -17,13 +17,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: Build merged dataset
-        run: python build_merged_dataset.py
+      - name: Collect HyperDash UPNL
+        run: python cloud_hyperdash.py
       - name: Commit
         run: |
           git config user.name  "github-actions"
           git config user.email "actions@github.com"
           git pull --rebase --autostash || true
-          git add btc_merged_hourly.csv upnl_history.csv cache
-          git diff --staged --quiet || git commit -m "cloud hourly $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git add upnl_history.csv
+          git diff --staged --quiet || git commit -m "cloud upnl $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
