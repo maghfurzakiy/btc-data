@@ -1,0 +1,29 @@
+# Taruh di: .github/workflows/merged.yml
+# Cloud baseline: tiap jam tangkap snapshot + regenerate, lalu commit (arsip 24/7).
+name: BTC Merged Hourly
+on:
+  schedule:
+    - cron: "7 * * * *"     # tiap jam menit ke-7 (UTC), hindari menit 0 yang sering delay
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: merged-archive
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build merged dataset
+        run: python build_merged_dataset.py
+      - name: Commit
+        run: |
+          git config user.name  "github-actions"
+          git config user.email "actions@github.com"
+          git pull --rebase --autostash || true
+          git add btc_merged_hourly.csv upnl_history.csv cache
+          git diff --staged --quiet || git commit -m "cloud hourly $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
