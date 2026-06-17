@@ -93,6 +93,27 @@ def get_positioning():
         pos[ts]=row
     return pos
 
+def get_positioning_btc():
+    # BTC-only cohort positioning (historicalCohortPositioningByMarket) -> long% per cohort, kolom *_btc
+    q=("query HistByMarket($coin: String!, $startTime: Float!){analytics{"
+       "historicalCohortPositioningByMarket(coin:$coin,startTime:$startTime){"
+       "timestamp pnlCohorts{cohortId longNotional shortNotional} "
+       "sizeCohorts{cohortId longNotional shortNotional}}}}")
+    pts=hd_post("HistByMarket",{"coin":"BTC","startTime":1672531200000},q)["analytics"]["historicalCohortPositioningByMarket"]; pos={}
+    for p in pts:
+        try: ts=floorH(int(datetime.strptime(p["timestamp"],"%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()))
+        except Exception: continue
+        flat={}
+        for c in (p.get("pnlCohorts") or [])+(p.get("sizeCohorts") or []): flat[c["cohortId"]]=c
+        row={}
+        for cid,sh in COHORTS:
+            c=flat.get(cid)
+            if c:
+                ln,s=float(c.get("longNotional",0) or 0),float(c.get("shortNotional",0) or 0); row[sh]=round(ln/(ln+s)*100,2) if (ln+s)>0 else ""
+            else: row[sh]=""
+        pos[ts]=row
+    return pos
+
 def capture_upnl_snapshot(price_now):
     q="query GetPnlCohort($id: String!){analytics{pnlCohort(id:$id){profitTraders lossTraders __typename}__typename}}"
     def pp(cid):
@@ -122,7 +143,9 @@ def main():
     kl=get_klines(); hours=sorted(kl); print(f"  klines: {len(kl)} jam")
     fr=get_funding(hours); print("  funding: ok")
     met=get_metrics(); print(f"  metrics: {len(met)} jam")
-    pos=get_positioning(); print(f"  positioning: {len(pos)} jam")
+    pos=get_positioning(); print(f"  positioning (agregat): {len(pos)} jam")
+    try: pos_btc=get_positioning_btc(); print(f"  positioning (BTC-only): {len(pos_btc)} jam")
+    except Exception as e: pos_btc={}; print(f"  positioning (BTC-only): GAGAL ({e}) -> kolom *_btc kosong")
     price_now=kl[hours[-1]]["c"]
     snap=capture_upnl_snapshot(price_now); arch=update_archive(snap); print(f"  UPNL arsip: {len(arch)} snapshot (+1 baru)")
     # mapping UPNL terbaru <= jam
@@ -133,8 +156,9 @@ def main():
             else: break
         return ep,vu
     cohort_cols=[s for _,s in COHORTS]
+    btc_cohort_cols=[s+"_btc" for _,s in COHORTS]
     cols=(["timestamp_utc","source","open","high","low","close","volume","taker_buy_vol","cvd","funding_rate",
-           "oi","oi_value","toptrader_ls_acct","toptrader_ls_pos","global_ls_acct","taker_ls_ratio"]+cohort_cols+["ep_profPct","vu_profPct"])
+           "oi","oi_value","toptrader_ls_acct","toptrader_ls_pos","global_ls_acct","taker_ls_ratio"]+cohort_cols+["ep_profPct","vu_profPct"]+btc_cohort_cols)
     def metrics_asof(ts):
         if ts in met: return met[ts]
         prev=[t for t in met if t<=ts]; return met[max(prev)] if prev else {}
@@ -146,13 +170,14 @@ def main():
             iso=datetime.fromtimestamp(ts,timezone.utc).strftime("%Y-%m-%d %H:%M")
             row=[iso,"hourly",k["o"],k["h"],k["l"],k["c"],k["v"],k["tb"],round(k["cvd"],2),fr.get(ts,""),
                  mm.get("oi",""),mm.get("oiv",""),mm.get("tt_acct",""),mm.get("tt_pos",""),mm.get("gl_acct",""),mm.get("taker","")]
-            row+=[pp.get(s,"") for s in cohort_cols]; row+=[ep,vu]; w.writerow(row); n+=1
+            ppb=pos_btc.get(ts,{})
+            row+=[pp.get(s,"") for s in cohort_cols]; row+=[ep,vu]; row+=[ppb.get(s,"") for s in cohort_cols]; w.writerow(row); n+=1
         # baris LIVE (menit berjalan): klines jam berjalan (parsial) + segar semuanya
-        lh=hours[-1]; k=kl[lh]; mm=metrics_asof(lh); latest_pos=pos.get(max(pos)) if pos else {}
+        lh=hours[-1]; k=kl[lh]; mm=metrics_asof(lh); latest_pos=pos.get(max(pos)) if pos else {}; latest_pos_btc=pos_btc.get(max(pos_btc)) if pos_btc else {}
         live_ts=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         row=[live_ts,"live",k["o"],k["h"],k["l"],k["c"],k["v"],k["tb"],round(k["cvd"],2),fr.get("_last",""),
              mm.get("oi",""),mm.get("oiv",""),mm.get("tt_acct",""),mm.get("tt_pos",""),mm.get("gl_acct",""),mm.get("taker","")]
-        row+=[latest_pos.get(s,"") for s in cohort_cols]; row+=[snap[3],snap[4]]; w.writerow(row); n+=1
+        row+=[latest_pos.get(s,"") for s in cohort_cols]; row+=[snap[3],snap[4]]; row+=[latest_pos_btc.get(s,"") for s in cohort_cols]; w.writerow(row); n+=1
     print(f"  -> {OUT} ({n} baris, termasuk 1 baris live). Upload ke Claude.")
 
 if __name__=="__main__": main()
