@@ -25,6 +25,16 @@ echo [2/4] Menangkap data segar lalu regenerate ...
 %PY% build_merged_dataset.py
 set "RC=%errorlevel%"
 
+if not "%RC%"=="0" (
+  echo.
+  echo ============================================
+  echo [BATAL] Builder gagal kode %RC% -- TIDAK commit/push.
+  echo CSV lama tetap utuh. Cek pesan error di atas, lalu jalankan lagi.
+  echo ============================================
+  pause
+  exit /b %RC%
+)
+
 echo [3/4] Commit perubahan ...
 git add btc_merged_hourly.csv upnl_history.csv cache
 git diff --staged --quiet
@@ -44,7 +54,6 @@ if errorlevel 1 (
 
 echo ============================================
 echo Selesai. btc_merged_hourly.csv siap diupload ke Claude.
-if not "%RC%"=="0" echo [Catatan] builder keluar kode %RC% - cek pesan di atas.
 echo ============================================
 echo.
 pause

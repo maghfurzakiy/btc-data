@@ -22,8 +22,16 @@ COHORTS=[("extremely_profitable","ep"),("very_profitable","vp"),("profitable","p
          ("unprofitable","unprof"),("very_unprofitable","vu"),("rekt","rekt"),("apex","apex"),
          ("whale","whale"),("large","large"),("medium","medium"),("small","small")]
 UA={"User-Agent":"Mozilla/5.0"}
-def jget(url):
-    with urllib.request.urlopen(urllib.request.Request(url,headers=UA),timeout=60) as r: return json.loads(r.read().decode())
+def _fetch(req,tries=5,backoff=2.0,timeout=60):
+    """urlopen dengan retry+backoff; tahan blip jaringan (mis. WinError 10054)."""
+    last=None
+    for k in range(tries):
+        try:
+            with urllib.request.urlopen(req,timeout=timeout) as r: return r.read()
+        except Exception as e:
+            last=e; print(f"    retry {k+1}/{tries} ({type(e).__name__}) ..."); time.sleep(backoff*(k+1))
+    raise last
+def jget(url): return json.loads(_fetch(urllib.request.Request(url,headers=UA)).decode())
 def floorH(ts): return ts-(ts%3600)
 
 def get_klines():
@@ -59,8 +67,8 @@ def get_metrics():
         if os.path.exists(cf): txt=open(cf,encoding="utf-8").read()
         else:
             try:
-                with urllib.request.urlopen(urllib.request.Request(VISION%(SYMBOL,SYMBOL,ds),headers=UA),timeout=60) as r:
-                    z=zipfile.ZipFile(io.BytesIO(r.read())); txt=z.read(z.namelist()[0]).decode()
+                raw=_fetch(urllib.request.Request(VISION%(SYMBOL,SYMBOL,ds),headers=UA),tries=2,backoff=1.0)
+                z=zipfile.ZipFile(io.BytesIO(raw)); txt=z.read(z.namelist()[0]).decode()
                 open(cf,"w",encoding="utf-8").write(txt)
             except Exception: txt=None
         if txt:
@@ -76,7 +84,7 @@ def get_metrics():
 def hd_post(op,vars,q):
     body=json.dumps({"operationName":op,"variables":vars,"query":q}).encode()
     req=urllib.request.Request(HD,data=body,headers={"Content-Type":"application/json","Origin":"https://hyperdash.com","User-Agent":"Mozilla/5.0"},method="POST")
-    with urllib.request.urlopen(req,timeout=60) as r: return json.loads(r.read().decode())["data"]
+    return json.loads(_fetch(req).decode())["data"]
 
 def get_positioning():
     q="query HistoricalCohortPositioningV2($startTime: Float!){analytics{historicalCohortPositioningV2(startTime:$startTime){timestamp positioning __typename}__typename}}"
@@ -133,8 +141,10 @@ def update_archive(snap):
                     key=int(r[0])//60*60; rows[key]=r       # dedup per-menit
     key=snap[0]//60*60; rows[key]=[snap[0],snap[1],snap[2],snap[3],snap[4]]
     ordered=[rows[k] for k in sorted(rows)]
-    with open(ARCH,"w",newline="",encoding="utf-8") as f:
+    _atmp=ARCH+".tmp"
+    with open(_atmp,"w",newline="",encoding="utf-8") as f:
         w=csv.writer(f); w.writerow(["snapshot_ts","source","btc_price","ep_profPct","vu_profPct"]); w.writerows(ordered)
+    os.replace(_atmp,ARCH)
     # arsip terurut utk mapping per-jam: (ts, ep, vu)
     return [(int(r[0]),r[3],r[4]) for r in ordered]
 
@@ -163,7 +173,8 @@ def main():
         if ts in met: return met[ts]
         prev=[t for t in met if t<=ts]; return met[max(prev)] if prev else {}
     n=0
-    with open(OUT,"w",newline="",encoding="utf-8") as f:
+    _tmp=OUT+".tmp"
+    with open(_tmp,"w",newline="",encoding="utf-8") as f:
         w=csv.writer(f); w.writerow(cols)
         for ts in hours:
             k=kl[ts]; mm=met.get(ts,{}); pp=pos.get(ts,{}); ep,vu=upnl_asof(ts)
@@ -178,6 +189,14 @@ def main():
         row=[live_ts,"live",k["o"],k["h"],k["l"],k["c"],k["v"],k["tb"],round(k["cvd"],2),fr.get("_last",""),
              mm.get("oi",""),mm.get("oiv",""),mm.get("tt_acct",""),mm.get("tt_pos",""),mm.get("gl_acct",""),mm.get("taker","")]
         row+=[latest_pos.get(s,"") for s in cohort_cols]; row+=[snap[3],snap[4]]; row+=[latest_pos_btc.get(s,"") for s in cohort_cols]; w.writerow(row); n+=1
+    os.replace(_tmp,OUT)
     print(f"  -> {OUT} ({n} baris, termasuk 1 baris live). Upload ke Claude.")
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    try:
+        main()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"\n[FATAL] build gagal: {type(e).__name__}: {e}")
+        print("[INFO] CSV lama TIDAK diubah; run_local.bat (versi baru) tidak akan commit/push.")
+        sys.exit(1)
