@@ -1,0 +1,9 @@
+# Arsip append-only & CSV yang di-regenerate: jangan pernah konflik.
+# 'union' = gabungkan baris dari kedua sisi tanpa penanda konflik.
+# - upnl_history.csv: build melakukan dedup+sort setelahnya, jadi gabungan jadi bersih.
+# - btc_merged_hourly.csv: build menimpa ulang file ini sesudah pull, jadi gabungan apa pun tertimpa.
+upnl_history.csv      merge=union
+btc_merged_hourly.csv merge=union
+
+# File sementara & backup jangan ganggu
+*.tmp                 -text

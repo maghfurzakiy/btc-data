@@ -18,8 +18,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [1/4] Sinkron arsip dari cloud ...
-git pull --rebase --autostash
+echo [1/4] Sinkron arsip dari cloud (merge + union, anti-konflik) ...
+git pull --no-rebase --autostash --no-edit
+if errorlevel 1 (
+  echo [ERROR] Sinkron gagal/konflik tak terduga. Jalankan:  git merge --abort  lalu coba lagi.
+  pause
+  exit /b 1
+)
 
 echo [2/4] Menangkap data segar lalu regenerate ...
 %PY% build_merged_dataset.py
@@ -48,7 +53,7 @@ echo [4/4] Push ke cloud ...
 git push
 if errorlevel 1 (
   echo Push ditolak - sinkron ulang lalu coba lagi ...
-  git pull --rebase --autostash
+  git pull --no-rebase --autostash --no-edit
   git push
 )
 
