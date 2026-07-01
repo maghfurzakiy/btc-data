@@ -18,10 +18,11 @@ Pakai:
   python add_regime.py                      # in-place append ke CSV default
   python add_regime.py in.csv out.csv       # baca in.csv, tulis out.csv
 """
-import csv, sys, math
+import csv, sys, math, os
 
 # ---- PARAM (tunable) ----
-CSV_IN  = sys.argv[1] if len(sys.argv) > 1 else "/mnt/user-data/uploads/btc_merged_hourly.csv"
+BASE    = os.path.dirname(os.path.abspath(__file__))   # folder tempat skrip berada
+CSV_IN  = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BASE, "btc_merged_hourly.csv")
 CSV_OUT = sys.argv[2] if len(sys.argv) > 2 else CSV_IN   # default: overwrite in-place
 MA_LEN        = 200     # MA200 (jam) ~ 8.3 hari
 SLOPE_LB      = 24      # slope MA diukur atas 24 bar
