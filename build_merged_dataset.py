@@ -8,6 +8,16 @@ BTC MERGED DATASET BUILDER (Pola A) — satu CSV siap-upload-ke-Claude.
 - Kolom 'source': hourly | live.
 Dipakai sama oleh: cloud (GitHub Actions, hourly) & lokal (run_local.bat: pull->build->push).
 Hanya pustaka standar Python.
+
+=== PATCH 1.43 (short-notional / ECC leg-2) ===
+Endpoint positioning (historical*) return shortNotional FULL-HISTORY tiap run, tapi versi lama
+cuma pakai 's' buat ratio long% lalu MEMBUANGnya. Patch ini MENYIMPAN short-notional $ mentah
+sebagai kolom baru *_sn (agregat) dan *_btc_sn (BTC-only), di-APPEND di akhir skema (tidak
+mengubah urutan kolom lama -> aman utk journal & CSV historis).
+- SN_COHORTS = cohort mana yang di-emit short-notional-nya. Default ["ep"] (yang dibutuhkan ECC).
+  Set ke [s for _,s in COHORTS] kalau mau SEMUA cohort.
+- Karena endpoint-nya historical, kolom *_sn LANGSUNG TERISI untuk seluruh seri (backfillable),
+  beda dgn ep_profPct (snapshot-only) yang tetap harus akumulasi 24/7.
 """
 import json,csv,os,io,sys,time,zipfile,urllib.request
 from datetime import datetime,timezone,timedelta
@@ -21,15 +31,54 @@ HD="https://api.hyperdash.com/graphql"
 COHORTS=[("extremely_profitable","ep"),("very_profitable","vp"),("profitable","prof"),
          ("unprofitable","unprof"),("very_unprofitable","vu"),("rekt","rekt"),("apex","apex"),
          ("whale","whale"),("large","large"),("medium","medium"),("small","small")]
+# >>> PATCH: cohort yang di-emit short-notional ($). Default cuma EP (cukup utk ECC leg-2).
+#     Ganti ke [s for _,s in COHORTS] kalau mau SEMUA cohort.
+SN_COHORTS=["ep"]
 UA={"User-Agent":"Mozilla/5.0"}
-def _fetch(req,tries=5,backoff=2.0,timeout=60):
-    """urlopen dengan retry+backoff; tahan blip jaringan (mis. WinError 10054)."""
-    last=None
-    for k in range(tries):
-        try:
-            with urllib.request.urlopen(req,timeout=timeout) as r: return r.read()
-        except Exception as e:
-            last=e; print(f"    retry {k+1}/{tries} ({type(e).__name__}) ..."); time.sleep(backoff*(k+1))
+import ssl, urllib.error
+
+# --- TLS context cascade: fix WinError 10054. CloudFront/AWS minta TLS1.2 renegotiation yg ditolak
+#     OpenSSL (urllib & requests sama-sama OpenSSL). TLS1.3 MENGHAPUS renegotiation dari protokol,
+#     jadi handshake mulus. Coba TLS1.3 dulu -> fallback TLS1.2-legacy -> default. Pemenang di-cache.
+#     STDLIB MURNI (requests tidak lagi diperlukan).
+def _ctx_tls13():
+    c = ssl.create_default_context(); c.minimum_version = ssl.TLSVersion.TLSv1_3; return c
+
+def _ctx_tls12_legacy():
+    c = ssl.create_default_context()
+    c.minimum_version = ssl.TLSVersion.TLSv1_2; c.maximum_version = ssl.TLSVersion.TLSv1_2
+    c.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0)
+    c.options &= ~getattr(ssl, "OP_NO_RENEGOTIATION", 0)
+    try: c.set_ciphers("DEFAULT@SECLEVEL=1")
+    except ssl.SSLError: pass
+    return c
+
+_CTX_BUILDERS = [("TLS1.3", _ctx_tls13), ("TLS1.2-legacy", _ctx_tls12_legacy),
+                 ("default", ssl.create_default_context)]
+_CTX_WINNER = None
+
+def _fetch(req, tries=5, backoff=2.0, timeout=60):
+    """retry+backoff + TLS-context cascade (fix WinError 10054 reneg OpenSSL).
+       req = urllib.request.Request (kompat call-site lama)."""
+    global _CTX_WINNER
+    order = list(range(len(_CTX_BUILDERS)))
+    if _CTX_WINNER is not None:
+        order = [_CTX_WINNER] + [i for i in order if i != _CTX_WINNER]
+    last = None
+    for attempt in range(tries):
+        for i in order:
+            name, build = _CTX_BUILDERS[i]
+            try:
+                with urllib.request.urlopen(req, timeout=timeout, context=build()) as r:
+                    if _CTX_WINNER != i:
+                        _CTX_WINNER = i; print(f"    [tls] konteks dipakai: {name}")
+                    return r.read()
+            except urllib.error.HTTPError:
+                _CTX_WINNER = i; raise   # HTTP 4xx/5xx = TLS sukses (mis. Vision 404) -> jangan coba ctx lain
+            except Exception as e:
+                last = e
+        print(f"    retry {attempt+1}/{tries} (semua ctx gagal: {type(last).__name__}) ...")
+        time.sleep(backoff*(attempt+1))
     raise last
 def jget(url): return json.loads(_fetch(urllib.request.Request(url,headers=UA)).decode())
 def floorH(ts): return ts-(ts%3600)
@@ -96,8 +145,15 @@ def get_positioning():
         for cid,sh in COHORTS:
             c=p["positioning"].get(cid)
             if c:
-                ln,s=c.get("longNotional",0),c.get("shortNotional",0); row[sh]=round(ln/(ln+s)*100,2) if (ln+s)>0 else ""
-            else: row[sh]=""
+                ln,s=c.get("longNotional",0),c.get("shortNotional",0)
+                row[sh]=round(ln/(ln+s)*100,2) if (ln+s)>0 else ""
+                if sh in SN_COHORTS:
+                    row[sh+"_sn"]=round(float(s or 0),0)    # >>> PATCH leg-2 short-notional (agregat)
+                    row[sh+"_ln"]=round(float(ln or 0),0)   # >>> PATCH long-notional (agregat)
+            else:
+                row[sh]=""
+                if sh in SN_COHORTS:
+                    row[sh+"_sn"]=""; row[sh+"_ln"]=""
         pos[ts]=row
     return pos
 
@@ -117,8 +173,15 @@ def get_positioning_btc():
         for cid,sh in COHORTS:
             c=flat.get(cid)
             if c:
-                ln,s=float(c.get("longNotional",0) or 0),float(c.get("shortNotional",0) or 0); row[sh]=round(ln/(ln+s)*100,2) if (ln+s)>0 else ""
-            else: row[sh]=""
+                ln,s=float(c.get("longNotional",0) or 0),float(c.get("shortNotional",0) or 0)
+                row[sh]=round(ln/(ln+s)*100,2) if (ln+s)>0 else ""
+                if sh in SN_COHORTS:
+                    row[sh+"_sn"]=round(s,0)               # >>> PATCH leg-2 short-notional (BTC-only)
+                    row[sh+"_ln"]=round(ln,0)              # >>> PATCH long-notional (BTC-only)
+            else:
+                row[sh]=""
+                if sh in SN_COHORTS:
+                    row[sh+"_sn"]=""; row[sh+"_ln"]=""
         pos[ts]=row
     return pos
 
@@ -167,8 +230,14 @@ def main():
         return ep,vu
     cohort_cols=[s for _,s in COHORTS]
     btc_cohort_cols=[s+"_btc" for _,s in COHORTS]
+    sn_cols=[s+"_sn" for s in SN_COHORTS]            # >>> PATCH: short-notional agregat (ep_sn, ...)
+    sn_btc_cols=[s+"_btc_sn" for s in SN_COHORTS]    # >>> PATCH: short-notional BTC-only (ep_btc_sn, ...)
+    ln_cols=[s+"_ln" for s in SN_COHORTS]            # >>> PATCH: long-notional agregat (ep_ln, ...)
+    ln_btc_cols=[s+"_btc_ln" for s in SN_COHORTS]    # >>> PATCH: long-notional BTC-only (ep_btc_ln, ...)
     cols=(["timestamp_utc","source","open","high","low","close","volume","taker_buy_vol","cvd","funding_rate",
-           "oi","oi_value","toptrader_ls_acct","toptrader_ls_pos","global_ls_acct","taker_ls_ratio"]+cohort_cols+["ep_profPct","vu_profPct"]+btc_cohort_cols)
+           "oi","oi_value","toptrader_ls_acct","toptrader_ls_pos","global_ls_acct","taker_ls_ratio"]
+          +cohort_cols+["ep_profPct","vu_profPct"]+btc_cohort_cols
+          +sn_cols+sn_btc_cols+ln_cols+ln_btc_cols)   # >>> PATCH: append di akhir (skema lama utuh)
     def metrics_asof(ts):
         if ts in met: return met[ts]
         prev=[t for t in met if t<=ts]; return met[max(prev)] if prev else {}
@@ -182,15 +251,26 @@ def main():
             row=[iso,"hourly",k["o"],k["h"],k["l"],k["c"],k["v"],k["tb"],round(k["cvd"],2),fr.get(ts,""),
                  mm.get("oi",""),mm.get("oiv",""),mm.get("tt_acct",""),mm.get("tt_pos",""),mm.get("gl_acct",""),mm.get("taker","")]
             ppb=pos_btc.get(ts,{})
-            row+=[pp.get(s,"") for s in cohort_cols]; row+=[ep,vu]; row+=[ppb.get(s,"") for s in cohort_cols]; w.writerow(row); n+=1
+            row+=[pp.get(s,"") for s in cohort_cols]; row+=[ep,vu]; row+=[ppb.get(s,"") for s in cohort_cols]
+            row+=[pp.get(s+"_sn","") for s in SN_COHORTS]          # >>> PATCH: ep_sn ...
+            row+=[ppb.get(s+"_sn","") for s in SN_COHORTS]         # >>> PATCH: ep_btc_sn ...
+            row+=[pp.get(s+"_ln","") for s in SN_COHORTS]          # >>> PATCH: ep_ln ...
+            row+=[ppb.get(s+"_ln","") for s in SN_COHORTS]         # >>> PATCH: ep_btc_ln ...
+            w.writerow(row); n+=1
         # baris LIVE (menit berjalan): klines jam berjalan (parsial) + segar semuanya
-        lh=hours[-1]; k=kl[lh]; mm=metrics_asof(lh); latest_pos=pos.get(max(pos)) if pos else {}; latest_pos_btc=pos_btc.get(max(pos_btc)) if pos_btc else {}
+        lh=hours[-1]; k=kl[lh]; mm=metrics_asof(lh)
+        latest_pos=pos.get(max(pos)) if pos else {}; latest_pos_btc=pos_btc.get(max(pos_btc)) if pos_btc else {}
         live_ts=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         row=[live_ts,"live",k["o"],k["h"],k["l"],k["c"],k["v"],k["tb"],round(k["cvd"],2),fr.get("_last",""),
              mm.get("oi",""),mm.get("oiv",""),mm.get("tt_acct",""),mm.get("tt_pos",""),mm.get("gl_acct",""),mm.get("taker","")]
-        row+=[latest_pos.get(s,"") for s in cohort_cols]; row+=[snap[3],snap[4]]; row+=[latest_pos_btc.get(s,"") for s in cohort_cols]; w.writerow(row); n+=1
+        row+=[latest_pos.get(s,"") for s in cohort_cols]; row+=[snap[3],snap[4]]; row+=[latest_pos_btc.get(s,"") for s in cohort_cols]
+        row+=[latest_pos.get(s+"_sn","") for s in SN_COHORTS]      # >>> PATCH live: ep_sn
+        row+=[latest_pos_btc.get(s+"_sn","") for s in SN_COHORTS]  # >>> PATCH live: ep_btc_sn
+        row+=[latest_pos.get(s+"_ln","") for s in SN_COHORTS]      # >>> PATCH live: ep_ln
+        row+=[latest_pos_btc.get(s+"_ln","") for s in SN_COHORTS]  # >>> PATCH live: ep_btc_ln
+        w.writerow(row); n+=1
     os.replace(_tmp,OUT)
-    print(f"  -> {OUT} ({n} baris, termasuk 1 baris live). Upload ke Claude.")
+    print(f"  -> {OUT} ({n} baris, termasuk 1 baris live). Kolom baru: {sn_cols+sn_btc_cols}. Upload ke Claude.")
 
 if __name__=="__main__":
     try:

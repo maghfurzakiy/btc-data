@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+
+# cache 1m klines (besar, ratusan MB) -- re-download dari Binance Vision kapan pun.
+# Cache metrics (kecil) tetap di-commit; hanya file 1m yang di-skip.
+cache/klines1m-*.csv
+cache/spot1m-*.csv

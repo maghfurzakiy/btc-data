@@ -18,7 +18,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [1/9] Sinkron arsip dari cloud (merge + union, anti-konflik) ...
+echo [1/10] Sinkron arsip dari cloud (merge + union, anti-konflik) ...
 git pull --no-rebase --autostash --no-edit
 if errorlevel 1 (
   echo [ERROR] Sinkron gagal/konflik tak terduga. Jalankan:  git merge --abort  lalu coba lagi.
@@ -26,7 +26,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [2/9] Menangkap data segar lalu regenerate ...
+echo [2/10] Menangkap data segar lalu regenerate ...
 %PY% build_merged_dataset.py
 set "RC=%errorlevel%"
 
@@ -40,39 +40,46 @@ if not "%RC%"=="0" (
   exit /b %RC%
 )
 
-echo [3/9] Sinyal Tier-1 (tz/ecc/er/rv) -- NOL network, dijamin jalan ...
+echo [3/10] Sinyal Tier-1 (tz/ecc/er/rv) -- NOL network, dijamin jalan ...
 %PY% add_signals.py
 if errorlevel 1 (
   echo [WARN] add_signals gagal -- CSV tetap valid tanpa kolom sinyal. Lanjut.
 )
 
-echo [4/9] Regime classifier (UP/DOWN/CHOP) -- NOL network, dijamin jalan ...
+echo [4/10] Regime classifier (UP/DOWN/CHOP) -- NOL network, dijamin jalan ...
 %PY% add_regime.py
 if errorlevel 1 (
   echo [WARN] add_regime gagal -- CSV tetap valid tanpa kolom regime. Lanjut.
 )
 
-echo [5/9] Volume Profile / AMT (POC/VAH/VAL/delta) ...
+echo [5/10] Volume Profile / AMT (POC/VAH/VAL/delta) ...
 %PY% add_volume_profile.py
 if errorlevel 1 (
   echo [WARN] add_volume_profile gagal -- CSV tetap valid tanpa kolom vp_. Lanjut.
   echo        ^(Sumber 1m Binance Vision mungkin sedang down; coba lagi nanti.^)
 )
 
-echo [6/9] Volume Profile 96h (swing, vp96_) ...
+echo [6/10] Volume Profile 96h (swing, vp96_) ...
 %PY% add_volume_profile.py btc_merged_hourly.csv 96 25 vp96_
 if errorlevel 1 (
   echo [WARN] add_volume_profile 96h gagal -- CSV tetap valid tanpa kolom vp96_. Lanjut.
 )
 
-echo [7/9] CVD spot + divergence + basis (#4 + #6) ...
+echo [7/10] CVD spot + divergence + basis (#4 + #6) ...
 %PY% add_spot_cvd.py
 if errorlevel 1 (
   echo [WARN] add_spot_cvd gagal -- CSV tetap valid tanpa kolom spot/basis. Lanjut.
   echo        ^(Sumber spot 1m Binance Vision mungkin sedang down; coba lagi nanti.^)
 )
 
-echo [8/9] Commit perubahan ...
+echo [8/10] Options / GEX (Deribit -- hitung sendiri, tanpa API key) ...
+%PY% add_options.py
+if errorlevel 1 (
+  echo [WARN] add_options gagal -- CSV tetap valid tanpa kolom opt_. Lanjut.
+  echo        ^(Deribit down / mark_iv absen -^> coba:  python add_options.py --greeks^)
+)
+
+echo [9/10] Commit perubahan ...
 git add btc_merged_hourly.csv upnl_history.csv cache
 git diff --staged --quiet
 if errorlevel 1 (
@@ -81,7 +88,7 @@ if errorlevel 1 (
   echo Tak ada perubahan untuk di-commit.
 )
 
-echo [9/9] Push ke cloud ...
+echo [10/10] Push ke cloud ...
 git push
 if errorlevel 1 (
   echo Push ditolak - sinkron ulang lalu coba lagi ...

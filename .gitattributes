@@ -7,3 +7,8 @@ btc_merged_hourly.csv merge=union
 
 # File sementara & backup jangan ganggu
 *.tmp                 -text
+
+# Skrip Windows WAJIB CRLF. Kalau LF, cmd.exe salah-parse baris panjang
+# (mis. --autostash ke-fragmen jadi '-autostash' -> "not recognized"). eol=crlf
+# memaksa git selalu checkout file .bat dengan CRLF di mesin mana pun.
+*.bat                 text eol=crlf
