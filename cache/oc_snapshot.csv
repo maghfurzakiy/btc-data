@@ -1,0 +1,2 @@
+hour_ts,oc_mean_quantile,oc_mri,oc_mri_spread,oc_mri_ceiling,oc_mri_floor,oc_mri_fast,oc_mri_slow,oc_price,oc_realized,oc_true_mean,oc_sth_cost,oc_cointime,oc_vwap90,oc_vwap365,oc_powerlaw,oc_200wma,oc_200dma
+1783058400,13.6,13.6,6.3,21.9,3.2,17.1,10.8,60716,53064,76546,68993,51802,71297,89361,142821,62497,75066
