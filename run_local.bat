@@ -72,11 +72,11 @@ if errorlevel 1 (
   echo        ^(Sumber spot 1m Binance Vision mungkin sedang down; coba lagi nanti.^)
 )
 
-echo [8/10] Options / GEX (Deribit -- hitung sendiri, tanpa API key) ...
-%PY% add_options.py
+echo [8/10] Konteks snapshot: options (Deribit GEX) + on-chain (Checkonchain) + CMC F&G/dominance ...
+%PY% add_context.py
 if errorlevel 1 (
-  echo [WARN] add_options gagal -- CSV tetap valid tanpa kolom opt_. Lanjut.
-  echo        ^(Deribit down / mark_iv absen -^> coba:  python add_options.py --greeks^)
+  echo [WARN] add_context gagal -- CSV tetap valid tanpa kolom opt_/oc_. Lanjut.
+  echo        ^(sumber down; coba manual:  python add_context.py --greeks  atau  --only options/onchain/cmc^)
 )
 
 echo [9/10] Commit perubahan ...
